@@ -1,0 +1,56 @@
+<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagnóstico p8</title>
+<style>
+body{margin:0;padding:16px;background:#000;color:#e7e9ea;font:16px/1.4 system-ui,sans-serif}
+h2{margin:0 0 4px}small{color:#71767b}
+#log{margin:14px 0;padding:12px;background:#16181c;border-radius:12px;font:13px/1.5 ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}
+button{width:100%;padding:14px;margin-top:10px;border:0;border-radius:28px;font:inherit;font-weight:700;background:#3b82f6;color:#fff}
+button:disabled{opacity:.4}
+.ok{color:#00ba7c}.er{color:#ff9aa8}
+</style></head><body>
+<h2>Diagnóstico e backup</h2>
+<small>Esta página só lê seus dados. Não altera nem apaga nada.</small>
+<div id="log"></div>
+<button id="bk" disabled>Baixar backup dos dados</button>
+<script>
+const L=document.getElementById('log'),B=document.getElementById('bk');
+const p=(t,c)=>{const s=document.createElement('div');if(c)s.className=c;s.textContent=t;L.append(s)};
+const mb=n=>(n/1048576).toFixed(2)+' MB';
+let parts=[],ready=false;
+const withTimeout=(pr,ms,msg)=>Promise.race([pr,new Promise((_,r)=>setTimeout(()=>r(new Error(msg)),ms))]);
+(async()=>{
+ /* 1. versão do index.html no servidor */
+ try{const t=await (await fetch('index.html',{cache:'no-store'})).text();
+  p(t.includes('let booted')?'✔ index.html no servidor é a versão corrigida':'✘ index.html no servidor é a versão ANTIGA',t.includes('let booted')?'ok':'er');
+  p('  tamanho: '+mb(t.length))}catch(e){p('✘ Não consegui ler o index.html: '+e.message,'er')}
+ /* 2. localStorage */
+ try{const ks=Object.keys(localStorage).filter(k=>k.startsWith('persona-ai'));
+  p('localStorage: '+ks.length+' chave(s) do app'+(ks.length?' (dados antigos ou de emergência)':''));
+  ks.forEach(k=>parts.push([k,localStorage.getItem(k),'ls']))}catch(e){p('localStorage indisponível: '+e.message,'er')}
+ /* 3. IndexedDB */
+ let db;
+ try{db=await withTimeout(new Promise((res,rej)=>{const r=indexedDB.open('persona-store',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error||new Error('erro'));r.onblocked=()=>rej(new Error('bloqueado'));r.onupgradeneeded=()=>{r.transaction.abort();rej(new Error('banco não existe neste endereço'))}}),8000,'IndexedDB não respondeu em 8s');
+  p('✔ IndexedDB abriu','ok')}catch(e){p('✘ IndexedDB: '+e.message,'er');p('Isso confirma o problema. O banco do navegador está travado. Reinicie o celular e abra esta página de novo.');B.disabled=!parts.length;ready=true;return}
+ try{
+  const keys=await withTimeout(new Promise((res,rej)=>{const r=db.transaction('kv').objectStore('kv').getAllKeys();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}),8000,'Listar chaves demorou mais de 8s');
+  p('Chaves salvas no banco: '+keys.length);
+  let tot=0;
+  for(let i=0;i<keys.length;i++){
+   const k=keys[i];
+   const v=await withTimeout(new Promise((res,rej)=>{const r=db.transaction('kv').objectStore('kv').get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}),20000,'Ler "'+k+'" demorou mais de 20s');
+   const n=typeof v==='string'?v.length:JSON.stringify(v).length;tot+=n;parts.push([k,v,'idb']);
+   p('  '+k+' → '+mb(n),n>20e6?'er':'');
+  }
+  p('Total no banco: '+mb(tot),tot>100e6?'er':'ok');
+  if(tot>100e6)p('Dados muito grandes (provavelmente imagens). Isso pode deixar o app lento ou travar ao abrir no celular.','er');
+ }catch(e){p('✘ '+e.message,'er')}
+ ready=true;B.disabled=!parts.length;
+ p(parts.length?'Pronto. Toque em "Baixar backup".':'Nenhum dado encontrado neste endereço.', parts.length?'ok':'er');
+})();
+B.onclick=()=>{try{
+ const out=['{"app":"p8","data":{'];
+ parts.forEach((x,i)=>{out.push((i?',':'')+JSON.stringify(x[2]+':'+x[0])+':'+JSON.stringify(x[1]))});
+ out.push('}}');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(out,{type:'application/json'}));
+ a.download='backup-p8-'+new Date().toISOString().slice(0,10)+'.json';document.body.append(a);a.click();a.remove();
+ p('✔ Backup gerado. Confira na pasta Downloads.','ok')}catch(e){p('✘ Falha ao gerar backup: '+e.message,'er')}};
+</script></body></html>
